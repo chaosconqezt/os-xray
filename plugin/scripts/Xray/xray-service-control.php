@@ -82,6 +82,11 @@ function xray_parse_instance($inst, bool $globalEnabled): array
  */
 function xray_get_all_instances(): array
 {
+    static $cache = null;
+    if ($cache !== null) {
+        return $cache;
+    }
+
     $cfg = OPNsense\Core\Config::getInstance()->object();
     $g   = $cfg->OPNsense->xray->general   ?? null;
     $ins = $cfg->OPNsense->xray->instances  ?? null;
@@ -221,6 +226,11 @@ function proc_is_running(string $pidfile): bool
     if ($pid <= 0) {
         return false;
     }
+
+    if (function_exists('posix_kill')) {
+        return posix_kill($pid, 0);
+    }
+
     exec('/bin/kill -0 ' . $pid . ' 2>/dev/null', $out, $rc);
     return $rc === 0;
 }
@@ -514,12 +524,16 @@ $inst_uuid = isset($argv[2]) ? trim($argv[2]) : '';
 
 // Базовая санитизация UUID аргумента
 // configd передаёт литерал "%1" когда аргумент не указан — отбрасываем
-if ($inst_uuid !== '') {
-    $inst_uuid = preg_replace('/[^0-9a-fA-F\-]/', '', $inst_uuid);
-    // UUID должен быть минимум 32 hex-символа + 4 дефиса = 36 символов
-    if (strlen($inst_uuid) < 36) {
-        $inst_uuid = '';
+if ($inst_uuid === '%1') {
+    $inst_uuid = '';
+} elseif ($inst_uuid !== '') {
+    $sanitized = preg_replace('/[^0-9a-fA-F\-]/', '', $inst_uuid);
+    // UUID должен быть ровно 36 символов (32 hex + 4 дефиса)
+    if (strlen($sanitized) !== 36) {
+        echo "ERROR: Invalid UUID format provided: {$inst_uuid}\n";
+        exit(1);
     }
+    $inst_uuid = $sanitized;
 }
 
 switch ($action) {

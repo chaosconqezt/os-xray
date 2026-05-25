@@ -16,7 +16,12 @@ function t2s_pid_path(string $uuid): string   { return "/var/run/tun2socks_{$uui
 
 // ─── Читаем config ────────────────────────────────────────────────────────────
 // Принимаем UUID инстанса как первый аргумент (передаётся из actions_xray.conf %1)
-$instUuid = isset($argv[1]) ? preg_replace('/[^0-9a-fA-F\-]/', '', trim($argv[1])) : '';
+$instUuid = isset($argv[1]) ? trim($argv[1]) : '';
+if ($instUuid === '%1') {
+    $instUuid = '';
+} elseif ($instUuid !== '') {
+    $instUuid = preg_replace('/[^0-9a-fA-F\-]/', '', $instUuid);
+}
 
 $cfg = OPNsense\Core\Config::getInstance()->object();
 $ins = $cfg->OPNsense->xray->instances ?? null;
@@ -26,7 +31,7 @@ if ($ins) {
     foreach ($ins->instance as $candidate) {
         if ($instUuid === '' || (string)$candidate['uuid'] === $instUuid) {
             $inst = $candidate;
-            if ($instUuid !== '') break; // точное совпадение — берём его
+            break; // точное совпадение ИЛИ первый доступный при пустом UUID
         }
     }
 }
@@ -149,8 +154,44 @@ if ($ifRc === 0) {
 }
 
 // ─── Uptime процессов ─────────────────────────────────────────────────────────
-$xrayUptimeSecs = $instUuid !== '' ? proc_uptime(xray_pid_path($instUuid)) : null;
-$t2sUptimeSecs  = $instUuid !== '' ? proc_uptime(t2s_pid_path($instUuid))  : null;
+$xrayUptimeSecs = null;
+$t2sUptimeSecs  = null;
+
+if ($instUuid !== '') {
+    $pids = [];
+    $map  = [];
+    $xp   = xray_pid_path($instUuid);
+    $tp   = t2s_pid_path($instUuid);
+
+    if (file_exists($xp)) {
+        $pid = (int)trim(file_get_contents($xp));
+        if ($pid > 0) {
+            $pids[] = $pid;
+            $map[$pid] = 'xray';
+        }
+    }
+    if (file_exists($tp)) {
+        $pid = (int)trim(file_get_contents($tp));
+        if ($pid > 0) {
+            $pids[] = $pid;
+            $map[$pid] = 't2s';
+        }
+    }
+
+    if (!empty($pids)) {
+        $psOut = shell_exec('ps -o pid=,etimes= -p ' . implode(',', $pids));
+        if ($psOut) {
+            foreach (explode("\n", trim($psOut)) as $line) {
+                $parts = preg_split('/\s+/', trim($line));
+                if (count($parts) === 2) {
+                    $p = (int)$parts[0];
+                    if (($map[$p] ?? '') === 'xray') $xrayUptimeSecs = (int)$parts[1];
+                    if (($map[$p] ?? '') === 't2s')  $t2sUptimeSecs  = (int)$parts[1];
+                }
+            }
+        }
+    }
+}
 
 // ─── Ping RTT до VPN-сервера ─────────────────────────────────────────────────
 $outboundJson = (string)($inst->outbound_config ?? '');
@@ -158,7 +199,7 @@ $outboundArr  = json_decode($outboundJson, true);
 $serverAddr   = $outboundArr['settings']['vnext'][0]['address'] ?? '';
 $pingRtt = 'N/A';
 if ($serverAddr !== '') {
-    exec('/sbin/ping -c 3 -W 2 ' . escapeshellarg($serverAddr) . ' 2>/dev/null', $pingOut, $pingRc);
+    exec('/sbin/ping -c 1 -W 1 ' . escapeshellarg($serverAddr) . ' 2>/dev/null', $pingOut, $pingRc);
     if ($pingRc === 0) {
         // Ищем "round-trip min/avg/max/stddev = 1.234/2.345/3.456/0.567 ms"
         $pingOutput = implode("\n", $pingOut);

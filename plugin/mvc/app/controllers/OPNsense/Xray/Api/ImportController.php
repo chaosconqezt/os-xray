@@ -82,72 +82,29 @@ class ImportController extends ApiControllerBase
         // Убираем лишние пробелы и кавычки
         $link = trim($link, " \t\n\r\0\x0B\"'");
 
-        if (strpos($link, 'vless://') !== 0) {
+        $parsed = parse_url($link);
+        if ($parsed === false || ($parsed['scheme'] ?? '') !== 'vless') {
             return ['error' => 'Link must start with vless://'];
         }
 
-        // Убираем схему
-        $rest = substr($link, 8); // после "vless://"
-
-        // Отделяем #name в конце
-        $name = '';
-        if (($hashPos = strrpos($rest, '#')) !== false) {
-            $name = htmlspecialchars(urldecode(substr($rest, $hashPos + 1)), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-            $rest = substr($rest, 0, $hashPos);
-        }
-
-        // Отделяем ?query
-        $query = '';
-        if (($qPos = strpos($rest, '?')) !== false) {
-            $query = substr($rest, $qPos + 1);
-            $rest  = substr($rest, 0, $qPos);
-        }
-
-        // Отделяем UUID@host:port
-        // UUID — всё до последнего @ (на случай если @ есть в UUID — маловероятно, но надёжно)
-        $atPos = strrpos($rest, '@');
-        if ($atPos === false) {
-            return ['error' => 'Missing @ separator between UUID and host'];
-        }
-
-        $uuid    = substr($rest, 0, $atPos);
-        $hostport = substr($rest, $atPos + 1);
-
-        // Разбираем host:port (с учётом IPv6 [::1]:port)
-        if (substr($hostport, 0, 1) === '[') {
-            // IPv6
-            $closeBracket = strpos($hostport, ']');
-            if ($closeBracket === false) {
-                return ['error' => 'Invalid IPv6 address format'];
-            }
-            $host = substr($hostport, 1, $closeBracket - 1);
-            $portStr = ltrim(substr($hostport, $closeBracket + 1), ':');
-        } else {
-            $lastColon = strrpos($hostport, ':');
-            if ($lastColon === false) {
-                return ['error' => 'Missing port in host:port'];
-            }
-            $host    = substr($hostport, 0, $lastColon);
-            $portStr = substr($hostport, $lastColon + 1);
-        }
-
-        $port = (int)$portStr;
-        if ($port <= 0 || $port > 65535) {
-            return ['error' => 'Invalid port: ' . $portStr];
-        }
+        $uuid = $parsed['user'] ?? '';
+        $host = $parsed['host'] ?? '';
+        $port = $parsed['port'] ?? 0;
+        $query = $parsed['query'] ?? '';
+        $name = isset($parsed['fragment']) ? htmlspecialchars(urldecode($parsed['fragment']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '';
 
         if (empty($uuid)) {
             return ['error' => 'UUID is empty'];
         }
         // BUG-10 FIX: валидация формата UUID до попадания в ответ.
-        // Без этой проверки пользователь получал ошибку только в момент Apply через XML Mask —
-        // непонятно далеко от точки ввода. Теперь ошибка сразу при парсинге.
-        // \z вместо $ — строгий конец строки, не допускает трейлинг \n (баг PHP PCRE: $ совпадает перед \n)
         if (!preg_match('/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z/', $uuid)) {
             return ['error' => 'Invalid UUID format (expected xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)'];
         }
         if (empty($host)) {
             return ['error' => 'Host is empty'];
+        }
+        if ($port <= 0 || $port > 65535) {
+            return ['error' => 'Invalid or missing port'];
         }
 
         // Парсим query string

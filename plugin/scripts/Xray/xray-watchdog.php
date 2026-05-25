@@ -33,6 +33,11 @@ function proc_alive(string $pidfile): bool
     if ($pid <= 0) {
         return false;
     }
+
+    if (function_exists('posix_kill')) {
+        return posix_kill($pid, 0);
+    }
+
     exec('/bin/kill -0 ' . $pid . ' 2>/dev/null', $o, $rc);
     return $rc === 0;
 }

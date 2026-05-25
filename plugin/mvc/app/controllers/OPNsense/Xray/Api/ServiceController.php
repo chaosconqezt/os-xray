@@ -27,16 +27,16 @@ class ServiceController extends ApiMutableServiceControllerBase
     }
 
     /**
-     * BUG-12 FIX: возвращает реальный статус reconfigure.
+     * Унифицированный метод для выполнения configd команд с общими проверками.
      */
-    public function reconfigureAction($uuid = '')
+    private function runConfigdAction(string $action, $uuid, bool $requirePost = true): array
     {
-        if (!$this->request->isPost()) {
+        if ($requirePost && !$this->request->isPost()) {
             return ['result' => 'failed', 'message' => 'POST required'];
         }
 
         $uuid    = $this->sanitizeUuid((string)$uuid);
-        $cmd     = 'xray reconfigure' . ($uuid !== '' ? ' ' . $uuid : '');
+        $cmd     = 'xray ' . $action . ($uuid !== '' ? ' ' . $uuid : '');
         $backend = new Backend();
         $output  = trim($backend->configdRun($cmd));
 
@@ -44,16 +44,18 @@ class ServiceController extends ApiMutableServiceControllerBase
             return ['result' => 'failed', 'message' => 'No response from configd (timeout or service unavailable)'];
         }
 
-        $hasError   = stripos($output, 'ERROR')   !== false
-                   || stripos($output, 'failed')  !== false;
-        $hasSuccess = stripos($output, 'OK')       !== false
-                   || stripos($output, 'disabled') !== false;
+        // Общая логика определения ошибок для большинства команд
+        $failed = stripos($output, 'ERROR') !== false || stripos($output, 'failed') !== false;
 
-        if ($hasError || !$hasSuccess) {
-            return ['result' => 'failed', 'message' => $output];
-        }
+        return [
+            'result'  => $failed ? 'failed' : 'ok',
+            'message' => $output,
+        ];
+    }
 
-        return ['result' => 'ok', 'message' => $output];
+    public function reconfigureAction($uuid = '')
+    {
+        return $this->runConfigdAction('reconfigure', $uuid);
     }
 
     public function statusAction($uuid = '')
@@ -85,53 +87,17 @@ class ServiceController extends ApiMutableServiceControllerBase
 
     public function startAction($uuid = '')
     {
-        if (!$this->request->isPost()) {
-            return ['result' => 'failed', 'message' => 'POST required'];
-        }
-        $uuid    = $this->sanitizeUuid((string)$uuid);
-        $cmd     = 'xray start' . ($uuid !== '' ? ' ' . $uuid : '');
-        $backend = new Backend();
-        $output  = trim($backend->configdRun($cmd));
-        $failed  = empty($output)
-                || stripos($output, 'ERROR')  !== false
-                || stripos($output, 'failed') !== false;
-        return [
-            'result'  => $failed ? 'failed' : 'ok',
-            'message' => $output ?: 'No response from configd',
-        ];
+        return $this->runConfigdAction('start', $uuid);
     }
 
     public function stopAction($uuid = '')
     {
-        if (!$this->request->isPost()) {
-            return ['result' => 'failed', 'message' => 'POST required'];
-        }
-        $uuid    = $this->sanitizeUuid((string)$uuid);
-        $cmd     = 'xray stop' . ($uuid !== '' ? ' ' . $uuid : '');
-        $backend = new Backend();
-        $output  = trim($backend->configdRun($cmd));
-        return [
-            'result'  => empty($output) ? 'failed' : 'ok',
-            'message' => $output ?: 'No response from configd',
-        ];
+        return $this->runConfigdAction('stop', $uuid);
     }
 
     public function restartAction($uuid = '')
     {
-        if (!$this->request->isPost()) {
-            return ['result' => 'failed', 'message' => 'POST required'];
-        }
-        $uuid    = $this->sanitizeUuid((string)$uuid);
-        $cmd     = 'xray restart' . ($uuid !== '' ? ' ' . $uuid : '');
-        $backend = new Backend();
-        $output  = trim($backend->configdRun($cmd));
-        $failed  = empty($output)
-                || stripos($output, 'ERROR')  !== false
-                || stripos($output, 'failed') !== false;
-        return [
-            'result'  => $failed ? 'failed' : 'ok',
-            'message' => $output ?: 'No response from configd',
-        ];
+        return $this->runConfigdAction('restart', $uuid);
     }
 
     /**
@@ -139,12 +105,7 @@ class ServiceController extends ApiMutableServiceControllerBase
      */
     public function logAction()
     {
-        if (!$this->request->isPost()) {
-            return ['result' => 'failed', 'message' => 'POST required'];
-        }
-        $backend = new Backend();
-        $output  = $backend->configdRun('xray log');
-        return ['log' => $output];
+        return $this->runConfigdAction('log', '');
     }
 
     /**
@@ -152,13 +113,7 @@ class ServiceController extends ApiMutableServiceControllerBase
      */
     public function xraylogAction($uuid = '')
     {
-        if (!$this->request->isPost()) {
-            return ['result' => 'failed', 'message' => 'POST required'];
-        }
-        $backend = new Backend();
-        $uuid    = $this->sanitizeUuid((string)$uuid);
-        $output  = $backend->configdRun('xray xraylog' . ($uuid !== '' ? ' ' . $uuid : ''));
-        return ['log' => $output];
+        return $this->runConfigdAction('xraylog', $uuid);
     }
 
     /**
@@ -166,19 +121,7 @@ class ServiceController extends ApiMutableServiceControllerBase
      */
     public function validateAction($uuid = '')
     {
-        if (!$this->request->isPost()) {
-            return ['result' => 'failed', 'message' => 'POST required'];
-        }
-        $uuid    = $this->sanitizeUuid((string)$uuid);
-        $cmd     = 'xray validate' . ($uuid !== '' ? ' ' . $uuid : '');
-        $backend = new Backend();
-        $output  = trim($backend->configdRun($cmd));
-        $ok      = stripos($output, 'OK')    !== false
-                && stripos($output, 'ERROR') === false;
-        return [
-            'result'  => $ok ? 'ok' : 'failed',
-            'message' => $output ?: 'No response from configd',
-        ];
+        return $this->runConfigdAction('validate', $uuid);
     }
 
     /**
@@ -219,16 +162,12 @@ class ServiceController extends ApiMutableServiceControllerBase
      */
     public function testconnectAction($uuid = '')
     {
-        if (!$this->request->isPost()) {
-            return ['result' => 'failed', 'message' => 'POST required'];
+        $response = $this->runConfigdAction('testconnect', $uuid);
+        if ($response['result'] === 'failed' && strpos($response['message'], 'No response') !== false) {
+            return $response;
         }
 
-        $uuid    = $this->sanitizeUuid((string)$uuid);
-        $cmd     = 'xray testconnect' . ($uuid !== '' ? ' ' . $uuid : '');
-        $backend = new Backend();
-        $output  = trim($backend->configdRun($cmd));
-
-        $httpCode = (int)$output;
+        $httpCode = (int)$response['message'];
         if ($httpCode >= 200 && $httpCode < 400) {
             return [
                 'result'    => 'ok',

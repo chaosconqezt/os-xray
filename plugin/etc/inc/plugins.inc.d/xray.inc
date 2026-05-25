@@ -79,8 +79,12 @@ function xray_configure_do(bool $verbose = false): void
                 $alreadyRunning = false;
                 if (file_exists($xrayPid)) {
                     $pid = (int)trim(file_get_contents($xrayPid));
-                    exec('/bin/kill -0 ' . $pid . ' 2>/dev/null', $out, $rc);
-                    $alreadyRunning = ($rc === 0);
+                    if (function_exists('posix_kill')) {
+                        $alreadyRunning = posix_kill($pid, 0);
+                    } else {
+                        exec('/bin/kill -0 ' . $pid . ' 2>/dev/null', $out, $rc);
+                        $alreadyRunning = ($rc === 0);
+                    }
                 }
 
                 if (!$alreadyRunning) {

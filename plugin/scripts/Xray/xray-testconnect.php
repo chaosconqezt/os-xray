@@ -14,7 +14,12 @@
 require_once('config.inc');
 
 // UUID инстанса как первый аргумент (из actions_xray.conf %1)
-$instUuid = isset($argv[1]) ? preg_replace('/[^0-9a-fA-F\-]/', '', trim($argv[1])) : '';
+$instUuid = isset($argv[1]) ? trim($argv[1]) : '';
+if ($instUuid === '%1') {
+    $instUuid = '';
+} elseif ($instUuid !== '') {
+    $instUuid = preg_replace('/[^0-9a-fA-F\-]/', '', $instUuid);
+}
 
 $cfg = OPNsense\Core\Config::getInstance()->object();
 $ins = $cfg->OPNsense->xray->instances ?? null;
@@ -24,7 +29,7 @@ if ($ins) {
     foreach ($ins->instance as $candidate) {
         if ($instUuid === '' || (string)$candidate['uuid'] === $instUuid) {
             $inst = $candidate;
-            if ($instUuid !== '') break;
+            break; // точное совпадение ИЛИ первый доступный при пустом UUID
         }
     }
 }
